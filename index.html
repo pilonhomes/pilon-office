@@ -144,6 +144,8 @@ nav.nav a.on { color: var(--accent); }
 .phead img { height: 40px; } .phead b { font: 800 22px var(--display); }
 .pgrid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
 .ptbl { width: 100%; border-collapse: collapse; } .ptbl td { border-bottom: 1px solid #e3e3e3; padding: 6px 4px; vertical-align: top; } .ptbl td:last-child { text-align: right; white-space: nowrap; font-weight: 700; }
+.clock.on { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 7%, var(--card)); }
+.clockt { font: 800 34px var(--display); font-stretch: 80%; font-variant-numeric: tabular-nums; line-height: 1.1; }
 .pill { font: 600 11.5px var(--body); padding: 4px 9px; border-radius: 99px; background: var(--soft); color: var(--muted); white-space: nowrap; }
 .pill.ok { color: var(--ok); } .pill.warn { color: var(--warn); background: color-mix(in srgb, var(--warn) 14%, transparent); } .pill.bad { color: #fff; background: var(--bad); }
 a.banner { text-decoration: none; }
@@ -168,7 +170,7 @@ a.banner { text-decoration: none; }
   <a href="#home" data-tab="home"><svg class="ico" viewBox="0 0 24 24"><path d="M4 11l8-7 8 7 M6 10v10h12V10"/></svg>Home</a>
   <a href="#jobs" data-tab="jobs"><svg class="ico" viewBox="0 0 24 24"><path d="M4 7h16v12H4z M9 7V5h6v2"/></svg>Jobs</a>
   <a href="#receipts" data-tab="receipts"><svg class="ico" viewBox="0 0 24 24"><path d="M6 3h12v18l-3-2-3 2-3-2-3 2z M9 8h6 M9 12h6"/></svg>Receipts</a>
-  <a href="#mileage" data-tab="mileage"><svg class="ico" viewBox="0 0 24 24"><path d="M5 16l1.5-5h11L19 16 M4 16h16v3H4z"/></svg>Mileage</a>
+  <a href="#hours" data-tab="mileage"><svg class="ico" viewBox="0 0 24 24"><path d="M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18z M12 7v5l3 2"/></svg>Time & km</a>
   <a href="#reports" data-tab="reports"><svg class="ico" viewBox="0 0 24 24"><path d="M5 20V10 M10 20V4 M15 20v-8 M20 20v-5"/></svg>Reports</a>
 </nav>
 <div id="toast" class="toast" role="status" aria-live="polite"></div>
@@ -180,7 +182,7 @@ const DEFAULT_SETTINGS = {
   gstNo: "", pstNo: "", etransfer: "", payableTo: "Pilon Homes",
   hourly: 85, helper: 45, markup: 0.15, contingency: 0.10, gst: 0.05, pst: 0.06,
   mile1: 0.73, mile2: 0.67, minCharge: 170, validDays: 30, deposit: 0.30, roundTo: 25,
-  payTerms: 15, fyStart: 1, pstOnInspections: false,
+  payTerms: 15, timeRate: 80, fyStart: 1, pstOnInspections: false,
   shareholders: ["Kirk", "Shareholder 2"],
   rateEdits: {}, customRates: [],
   folders: {
@@ -326,6 +328,18 @@ function tripsCalc(trips, S) {
   return out;
 }
 
+// ---- hours (timesheet)
+function localStamp(d) { d = d || new Date(); const p = n => String(n).padStart(2, "0"); return d.getFullYear() + "-" + p(d.getMonth() + 1) + "-" + p(d.getDate()) + "T" + p(d.getHours()) + ":" + p(d.getMinutes()) + ":" + p(d.getSeconds()); }
+function hoursOf(h, nowMs) {
+  if (num(h.hours) !== null) return Math.max(0, +h.hours);
+  if (!h.start) return 0;
+  const s = new Date(h.start).getTime(), e = h.end ? new Date(h.end).getTime() : (nowMs || Date.now());
+  if (isNaN(s) || isNaN(e)) return 0;
+  return Math.max(0, (e - s) / 3600000 - N(h.breakMin) / 60);
+}
+function hourDate(h) { return h.date || (h.start ? String(h.start).slice(0, 10) : null); }
+function hoursValue(h, S) { return r2(hoursOf(h) * (num(h.rate) !== null ? +h.rate : S.timeRate)); }
+
 // ---- reports
 function summarize(state, fy, DATA, CATS) {
   const S = state.settings, rates = allRates(S, DATA);
@@ -398,7 +412,7 @@ function jobProfit(job, state, DATA, CATS) {
            perHour: q.hours > 0 ? r2(profit / q.hours) : null };
 }
 
-if (typeof module !== "undefined") module.exports = { DEFAULT_SETTINGS, r2, fyOf, qtrOf, allRates, rateStd, detectType, lineCalc, jobCalc, invoiceCalc, receiptCalc, tripsCalc, summarize, jobProfit, sectionGroups };
+if (typeof module !== "undefined") module.exports = { hoursOf, hourDate, hoursValue, localStamp, DEFAULT_SETTINGS, r2, fyOf, qtrOf, allRates, rateStd, detectType, lineCalc, jobCalc, invoiceCalc, receiptCalc, tripsCalc, summarize, jobProfit, sectionGroups };
 
 // ===================== offline store + Google sync (replaces the Claude-hosted services) =====================
 const platform = (() => {
@@ -451,7 +465,10 @@ const platform = (() => {
     const ctl = new AbortController(); const t = setTimeout(() => ctl.abort(), timeoutMs || 90000);
     let res;
     try { res = await fetch(cfg.url, { method: "POST", headers: { "Content-Type": "text/plain;charset=utf-8" }, body: JSON.stringify(Object.assign({}, body, { action, token: cfg.token })), signal: ctl.signal, redirect: "follow" }); }
-    catch (e) { throw Object.assign(new Error("Couldn't reach Google (" + (e.name === "AbortError" ? "timed out" : "network") + ")."), { code: "offline" }); }
+    catch (e) {
+      if (!navigator.onLine) throw Object.assign(new Error("No internet connection."), { code: "offline" });
+      throw Object.assign(new Error(e.name === "AbortError" ? "Google took too long to answer - try again." : "Can't reach your Google script - check the web app address in Settings (copy it with the Copy button in Manage deployments) and that access is set to Anyone."), { code: "unreachable" });
+    }
     finally { clearTimeout(t); }
     let j; try { j = await res.json(); } catch (e) { throw Object.assign(new Error("Google sent back something unexpected - check the web app address in Settings."), { code: "bad_url" }); }
     if (!j.ok) throw Object.assign(new Error(j.error || "Google script error"), { code: /^auth/.test(j.error) ? "auth" : /^claude/.test(j.error) ? "claude" : "server" });
@@ -476,7 +493,7 @@ const platform = (() => {
       catch (e) {
         if (e.code === "wait") continue;
         it.attempts++; it.retry = false; it.lastError = e.message; await saveOut(it);
-        if (e.code === "offline" || e.code === "auth" || e.code === "not_connected" || e.code === "bad_url") break;
+        if (["offline", "unreachable", "auth", "not_connected", "bad_url"].includes(e.code)) break;
       }
     }
     countPending();
@@ -590,8 +607,8 @@ const NOTES_LIB = {
 let db = null, sample = null, mcp = null, downloads = null;
 const state = {
   settings: JSON.parse(JSON.stringify(DEFAULT_SETTINGS)),
-  jobs: [], receipts: [], trips: [], ledger: [],
-  loaded: { settings: false, jobs: false, receipts: false, trips: false, ledger: false },
+  jobs: [], receipts: [], trips: [], ledger: [], hours: [],
+  loaded: { settings: false, jobs: false, receipts: false, trips: false, ledger: false, hours: false },
   offline: false, fy: null, draft: null, filter: { rq: "", rcat: "", rjob: "" }, busy: ""
 };
 const $ = s => document.querySelector(s);
@@ -603,6 +620,8 @@ const today = () => { const d = new Date(); return d.getFullYear() + "-" + Strin
 const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
 const S = () => state.settings;
 const RATES = () => allRates(S(), DATA);
+const SECTIONS = () => (S().sectionTypes && S().sectionTypes.length) ? S().sectionTypes : DATA.sections;
+const SECDATA = () => ({ sections: SECTIONS() });
 const route = () => (location.hash || "#home").slice(1);
 const go = h => { location.hash = h; };
 function curFY() { return state.fy || fyOf(today(), S().fyStart); }
@@ -643,7 +662,7 @@ async function boot() {
     if (s.exists) state.settings = Object.assign(JSON.parse(JSON.stringify(DEFAULT_SETTINGS)), s.data());
     state.loaded.settings = true; softRender();
   }, () => {});
-  for (const col of ["jobs", "receipts", "trips", "ledger"]) {
+  for (const col of ["jobs", "receipts", "trips", "ledger", "hours"]) {
     db.collection(col).onSnapshot(snap => {
       state[col] = snap.docs.map(d => Object.assign({}, d.data(), { id: d.id }));
       state.loaded[col] = true;
@@ -667,14 +686,14 @@ document.addEventListener("focusout", () => setTimeout(() => {
 }, 50));
 window.addEventListener("hashchange", () => {
   const r = route(), d = state.draft;
-  if (d && !(r === "receipt-new" || r === "receipt-" + d.id || r === "trip-" + d.id)) state.draft = null;
+  if (d && !(r === "receipt-new" || r === "receipt-" + d.id || r === "trip-" + d.id || r === "hour-" + d.id)) state.draft = null;
   render(); window.scrollTo(0, 0);
 });
 
 // ---------------- render ----------------
 function render() {
   const r = route();
-  const tab = r.startsWith("job") ? "jobs" : r.startsWith("receipt") ? "receipts" : r.startsWith("trip") ? "mileage" : r;
+  const tab = r.startsWith("job") ? "jobs" : r.startsWith("receipt") ? "receipts" : (r.startsWith("trip") || r.startsWith("hour")) ? "mileage" : r;
   document.querySelectorAll(".nav a").forEach(a => a.classList.toggle("on", a.dataset.tab === tab));
   let html = "";
   try {
@@ -685,6 +704,8 @@ function render() {
     else if (r === "receipts") html = vReceipts();
     else if (r === "receipt-new" || r.startsWith("receipt-")) html = vReceiptEdit(r.slice(8));
     else if (r === "mileage" || r.startsWith("trip-")) html = vMileage();
+    else if (r === "hours") html = vHours();
+    else if (r.startsWith("hour-")) html = vHourEdit(r.slice(5));
     else if (r === "reports") html = vReports();
     else if (r === "settings") html = vSettings();
     else html = vHome();
@@ -722,6 +743,7 @@ function vHome() {
       <button class="big" data-action="newJob">${ico("plus")}<span>New quote</span></button>
     </div>
   </section>
+  ${clockCard()}
   <section class="tiles">
     ${tile("Revenue", money0(sm.revenue), "invoiced this year")}
     ${tile("Expenses", money0(sm.expenses), "deductible + mileage")}
@@ -795,7 +817,7 @@ function field(label, bind, val, opts) {
   return `<label class="fld ${opts.cls || ""}" for="${id}"><span>${label}</span><input id="${id}" data-bind="${bind}" type="${opts.type || "text"}" ${opts.type === "number" ? 'inputmode="decimal" step="any"' : ""} value="${esc(val ?? "")}" placeholder="${esc(opts.ph || "")}"></label>`;
 }
 function vJobDetails(j) {
-  const types = DATA.sections.map(s => s.type);
+  const types = SECTIONS().map(s => s.type);
   return `<section class="card form">
     <div class="grid2">
       ${field("Job / quote #", "job.number", j.number)}
@@ -819,7 +841,7 @@ function vJobDetails(j) {
   </section>`;
 }
 function itemOptions(j, secIdx, sel) {
-  const groups = sectionGroups(j, secIdx, DATA);
+  const groups = sectionGroups(j, secIdx, SECDATA());
   const rates = RATES();
   const fit = rates.filter(r => r.cat === "General" || !groups.length || groups.includes(r.cat));
   const rest = rates.filter(r => !fit.includes(r));
@@ -897,6 +919,7 @@ function vJobCosts(j) {
     ${tile("Mileage", money0(p.mileage), p.trips.length + " trips")}
     ${tile("Profit", money0(p.profit), p.perHour !== null ? money0(p.perHour) + " per estimated hour" : "", p.profit < 0 ? "neg" : "")}
   </section>
+  ${jobHoursCard(j)}
   <section class="card"><div class="bar"><h3>Receipts</h3><button class="btn sm primary" data-action="snap" data-job="${esc(j.number)}">${ico("camera")} Snap</button></div>
   ${p.receipts.length ? p.receipts.map(receiptRow).join("") : `<p class="muted">Receipts tagged with job ${esc(j.number)} show here.</p>`}</section>
   <section class="card"><div class="bar"><h3>Trips</h3><button class="btn sm" data-action="newTrip" data-job="${esc(j.number)}">${ico("car")} Log trip</button></div>
@@ -994,7 +1017,7 @@ function vMileage() {
   const fy = curFY(), tc = tripsCalc(state.trips, S());
   const list = state.trips.filter(t => tc[t.id].fy === fy).sort((a, b) => (b.date || "").localeCompare(a.date || ""));
   const km = list.reduce((a, t) => a + tc[t.id].km, 0), al = list.reduce((a, t) => a + tc[t.id].allowance, 0);
-  return `<div class="bar"><h2>Mileage</h2><button class="btn primary" data-action="newTrip">${ico("car")} Log trip</button></div>
+  return `${timeTabs("mileage")}<div class="bar"><h2>Mileage</h2><button class="btn primary" data-action="newTrip">${ico("car")} Log trip</button></div>
   <section class="tiles">${tile("Business km", Math.round(km).toLocaleString(), "FY " + fyLabel(fy, S().fyStart))}${tile("Allowance", money0(al), "CRA $" + S().mile1 + "/km first 5,000 km")}</section>
   <section class="card">${list.length ? list.map(t => tripRow(t, tc)).join("") : `<p class="muted">No trips yet. Log every drive to a job site, inspection or supply run in your own vehicle - the corporation can pay you the CRA rate tax-free.</p>`}</section>
   <p class="hint">Personal vehicle: don't also expense fuel. Home-to-shop commuting doesn't count. Pay yourself the allowance and record it under Reports › Shareholder.</p>`;
@@ -1051,8 +1074,8 @@ function vReports() {
     <tr class="b"><td>Total expenses</td>${LINES.map(l => `<td>${money(sm.expByLine[l] || 0)}</td>`).join("")}<td>${money(sm.expenses)}</td></tr>
     <tr class="b"><td>Net (before CCA)</td>${LINES.map(l => `<td>${money((sm.revByLine[l] || 0) - (sm.expByLine[l] || 0))}</td>`).join("")}<td>${money(sm.net)}</td></tr>
   </tbody></table></div>
-  <div class="kv">${kv("Capital purchases (CCA)", money(sm.capital))}${kv("Meals - total spent", money(sm.meals))}${kv("Business km", Math.round(sm.km).toLocaleString())}${kv("Unpaid invoices", money(sm.receivable))}${kv("Owed to shareholders (all years)", money(sm.shBal))}</div></section>
-  <section class="card"><h3>Job profit</h3>${profits.length ? `<div class="scroll"><table class="tbl"><thead><tr><th>Job</th><th>Invoiced</th><th>Receipts</th><th>Mileage</th><th>Profit</th></tr></thead><tbody>${profits.map(({ j, p }) => `<tr><td><a href="#job-${j.id}-costs">${esc(j.number)} ${esc(j.project || "")}</a></td><td>${money(p.revenue)}</td><td>${money(p.costs)}</td><td>${money(p.mileage)}</td><td class="${p.profit < 0 ? "neg" : ""}">${money(p.profit)}</td></tr>`).join("")}</tbody></table></div>` : `<p class="muted">Invoiced jobs this year show here.</p>`}</section>
+  <div class="kv">${kv("Capital purchases (CCA)", money(sm.capital))}${kv("Meals - total spent", money(sm.meals))}${kv("Business km", Math.round(sm.km).toLocaleString())}${kv("Hours logged", fyHours(fy).toFixed(1) + " h \u00b7 " + money0(fyHoursValue(fy)))}${kv("Unpaid invoices", money(sm.receivable))}${kv("Owed to shareholders (all years)", money(sm.shBal))}</div></section>
+  <section class="card"><h3>Job profit</h3>${profits.length ? `<div class="scroll"><table class="tbl"><thead><tr><th>Job</th><th>Invoiced</th><th>Receipts</th><th>Mileage</th><th>Profit</th><th>Hours</th><th>Per hour</th></tr></thead><tbody>${profits.map(({ j, p }) => { const hh = jobHours(j.number); return `<tr><td><a href="#job-${j.id}-costs">${esc(j.number)} ${esc(j.project || "")}</a></td><td>${money(p.revenue)}</td><td>${money(p.costs)}</td><td>${money(p.mileage)}</td><td class="${p.profit < 0 ? "neg" : ""}">${money(p.profit)}</td><td>${hh ? hh.toFixed(1) : "-"}</td><td>${hh ? money(p.profit / hh) : "-"}</td></tr>`; }).join("")}</tbody></table></div>` : `<p class="muted">Invoiced jobs this year show here.</p>`}</section>
   <section class="card"><div class="bar"><h3>Shareholder & tax ledger</h3><button class="btn sm" data-action="addLedger">${ico("plus")} Add entry</button></div>
     <p class="muted sm">Record money you lend the company or take back, and GST/PST remittances. Personal-card receipts and mileage are added to the balance automatically.</p>
     ${ledger.map(e => `<div class="lrow ledger">
@@ -1082,6 +1105,8 @@ function vSettings() {
   </section>
   <section class="card form"><h4>Pricing</h4>
     <div class="grid3">${pf("Hourly rate $", "hourly")}${pf("Helper rate $", "helper")}${pf("Minimum charge $", "minCharge")}</div>
+    <div class="grid3">${pf("Timesheet rate $/hr", "timeRate")}</div>
+    <p class="hint">Timesheet rate values the hours you clock (your time, not what you charge clients).</p>
     <div class="grid3">${pf("Material markup %", "markup", true)}${pf("Contingency %", "contingency", true)}${pf("Round prices up to $", "roundTo")}</div>
     <div class="grid3">${pf("Deposit %", "deposit", true)}${pf("Quote valid (days)", "validDays")}${pf("Invoice due (days)", "payTerms")}</div>
   </section>
@@ -1090,6 +1115,7 @@ function vSettings() {
     <div class="grid2">${pf("Mileage first 5,000 km $", "mile1")}${pf("Mileage after $", "mile2")}</div>
     <label class="check"><input type="checkbox" data-bind="set.pstOnInspections" ${s.pstOnInspections ? "checked" : ""}> Charge PST on home inspections (confirm with Saskatchewan Finance)</label>
   </section>
+  ${secEditor()}
   <section class="card form"><h4>Rates</h4>
     <input type="search" placeholder="Search ${rates.length} rate items to edit..." data-filter="rateq" value="${esc(state.filter.rateq || "")}" aria-label="Search rates">
     ${shown.slice(0, 40).map(r => `<div class="rate"><div class="grow"><b>${esc(r.name)}</b><div class="muted sm">${esc(r.cat)} · per ${esc(r.unit)}${r.hourly || r.min ? " · uses setting above" : ""}</div></div>
@@ -1116,6 +1142,49 @@ function vSettings() {
   </section>`;
 }
 
+// ---------------- job types & sections editor ----------------
+function secEditor() {
+  const types = SECTIONS(), i = Math.min(state.secEdit || 0, types.length - 1), t = types[i];
+  const cats = [...new Set(RATES().map(r => r.cat))].filter(c => c !== "General");
+  const custom = !!(S().sectionTypes && S().sectionTypes.length);
+  return `<section class="card form" id="secEditor"><h4>Job types & sections</h4>
+    <p class="muted sm">These set the sections a new job starts with and which rate items each section's dropdown suggests. Changes apply to new jobs and when you change a job's type; existing quotes keep their sections.</p>
+    <label class="fld" for="secPick"><span>Job type to edit</span><select id="secPick" data-action-change="secPick">${types.map((x, k) => `<option value="${k}" ${k === i ? "selected" : ""}>${esc(x.type)}</option>`).join("")}</select></label>
+    ${t ? `<div class="grid2">${field("Job type name", "sect." + i + ".type", t.type)}${field("Project-name keywords (comma separated)", "sect." + i + ".kwTxt", (t.kw || []).join(", "), { ph: "e.g. bath, ensuite" })}</div>
+    <p class="hint">Typing a project name containing a keyword picks this job type. If several match, the type further down the list wins.</p>
+    ${(t.sections || []).map((sec, k) => `<div class="line">
+      <div class="lrow"><span class="secno">${k + 1}</span><input data-bind="sect.${i}.sections.${k}.name" value="${esc(sec.name)}" aria-label="Section name">
+        <button class="icon" data-action="secMove" data-t="${i}" data-k="${k}" data-d="-1" aria-label="Move up" ${k ? "" : "disabled"}>\u2191</button>
+        <button class="icon" data-action="secMove" data-t="${i}" data-k="${k}" data-d="1" aria-label="Move down" ${k < t.sections.length - 1 ? "" : "disabled"}>\u2193</button>
+        <button class="icon" data-action="secDel" data-t="${i}" data-k="${k}" aria-label="Remove section">${ico("x")}</button></div>
+      <input data-bind="sect.${i}.sections.${k}.groupsTxt" value="${esc((sec.groups || []).join(", "))}" placeholder="Rate categories for this section (blank = all items)" aria-label="Rate categories">
+    </div>`).join("")}
+    <p class="hint">Rate categories you can use: ${cats.map(esc).join(", ")}. "General" items (hourly, lump sum, allowance) always show.</p>
+    <div class="actions"><button class="btn sm" data-action="secAdd" data-t="${i}">${ico("plus")} Add section</button>
+      <button class="btn sm" data-action="typeAdd">${ico("plus")} New job type</button>
+      ${types.length > 1 ? `<button class="btn sm ghost danger" data-action="typeDel" data-t="${i}">Delete this job type</button>` : ""}
+      ${custom ? `<button class="btn sm ghost" data-action="secReset">Reset all to standard</button>` : ""}</div>` : ""}
+  </section>`;
+}
+function editableTypes() {
+  if (!(S().sectionTypes && S().sectionTypes.length)) S().sectionTypes = JSON.parse(JSON.stringify(DATA.sections));
+  return S().sectionTypes;
+}
+document.addEventListener("change", e => { if (e.target.id === "secPick") { state.secEdit = +e.target.value; render(); } });
+document.addEventListener("click", e => {
+  const a = e.target.closest("[data-action]"); if (!a) return;
+  const act = a.dataset.action; if (!/^(sec|type)/.test(act)) return;
+  const T = editableTypes(), t = T[+a.dataset.t];
+  if (act === "secAdd") t.sections.push({ name: "New section", groups: [] });
+  else if (act === "secDel") t.sections.splice(+a.dataset.k, 1);
+  else if (act === "secMove") { const k = +a.dataset.k, d = +a.dataset.d; const [x] = t.sections.splice(k, 1); t.sections.splice(k + d, 0, x); }
+  else if (act === "typeAdd") { T.splice(T.length - 1, 0, { type: "New job type", kw: [], sections: [{ name: "Scope of work", groups: [] }] }); state.secEdit = T.length - 2; }
+  else if (act === "typeDel") { if (!a.dataset.confirm) { a.dataset.confirm = 1; a.textContent = "Tap again to delete " + t.type; return; } T.splice(+a.dataset.t, 1); state.secEdit = 0; }
+  else if (act === "secReset") { if (!a.dataset.confirm) { a.dataset.confirm = 1; a.textContent = "Tap again - your section edits are replaced"; return; } S().sectionTypes = []; state.secEdit = 0; }
+  else return;
+  saveSettings(); render();
+});
+
 // ---------------- input binding ----------------
 function setPath(obj, path, val) {
   const ks = path.split("."); let o = obj;
@@ -1123,7 +1192,7 @@ function setPath(obj, path, val) {
   o[ks[ks.length - 1]] = val;
 }
 function curJob() { const r = route(); return r.startsWith("job-") ? jobById(r.slice(4).split("-")[0]) : null; }
-const NUMERIC = /\.(qty|rate|mat|other|markup|amount|deposit|total|gst|pst|km|odoStart|odoEnd)$/;
+const NUMERIC = /\.(qty|rate|mat|other|markup|amount|deposit|total|gst|pst|km|odoStart|odoEnd|hours|breakMin)$/;
 function onInput(e, isChange) {
   const el = e.target;
   if (el.dataset.filter) { state.filter[el.dataset.filter] = el.value; if (isChange || el.type === "search") { clearTimeout(onInput.t); onInput.t = setTimeout(() => { const pos = el.selectionStart; render(); const n = document.querySelector(`[data-filter="${el.dataset.filter}"]`); if (n && n.type === "search") { n.focus(); try { n.setSelectionRange(pos, pos); } catch (x) {} } }, isChange ? 0 : 250); } return; }
@@ -1141,6 +1210,13 @@ function onInput(e, isChange) {
   const b = el.dataset.bind; if (!b) return;
   let val = el.type === "checkbox" ? el.checked : el.value;
   const [root, ...rest] = b.split("."); const path = rest.join(".");
+  if (root === "sect") {
+    const T = editableTypes();
+    if (path.endsWith(".kwTxt")) setPath(T, path.replace(/\.kwTxt$/, ".kw"), val.split(",").map(x => x.trim()).filter(Boolean));
+    else if (path.endsWith(".groupsTxt")) setPath(T, path.replace(/\.groupsTxt$/, ".groups"), val.split(",").map(x => x.trim()).filter(Boolean));
+    else setPath(T, path, val);
+    saveSettings(); if (isChange && /\.type$/.test(path)) setTimeout(render, 0); return;
+  }
   if (root === "newrate") { state.newrate = state.newrate || {}; state.newrate[path] = val; return; }
   if (root === "set") {
     if (path === "shareholdersTxt") { S().shareholders = val.split(",").map(x => x.trim()).filter(Boolean); }
@@ -1160,7 +1236,7 @@ function onInput(e, isChange) {
     if (/^sections\.\d+\.contPct$/.test(path)) { const i = +path.split(".")[1]; j.sections[i].cont = num(val) === null ? null : num(val) / 100; }
     else if (path === "pst") j.pst = val === "yes" ? true : val === "no" ? false : null;
     else setPath(j, path, NUMERIC.test("." + path) && el.type !== "date" ? num(val) : val);
-    if (path === "project" && isChange) { const t = detectType(val, DATA); if (t !== j.type && (j.type === "Custom" || !j.lines.length)) applyType(j, t); if (/inspect/i.test(val) && !j.lines.length) setupInspection(j); }
+    if (path === "project" && isChange) { const t = detectType(val, SECDATA()); if (t !== j.type && (j.type === "Custom" || !j.lines.length)) applyType(j, t); if (/inspect/i.test(val) && !j.lines.length) setupInspection(j); }
     if (path === "type" && isChange) applyType(j, val);
     if (/^lines\.\d+\.item$/.test(path) && isChange) { const li = +path.split(".")[1]; const rt = RATES().find(r => r.name === val); if (rt) { j.lines[li].desc = rt.desc; } }
     saveJob(j);
@@ -1168,7 +1244,7 @@ function onInput(e, isChange) {
   }
 }
 function applyType(j, t) {
-  j.type = t; const def = DATA.sections.find(s => s.type === t);
+  j.type = t; const def = SECTIONS().find(s => s.type === t);
   const names = def && def.sections.length ? def.sections.map(s => s.name) : j.sections.map(s => s.name);
   j.sections = names.map((n, i) => Object.assign({}, j.sections[i] || {}, { name: n }));
   if (t === "Roofing") j.line = "Renovation";
@@ -1559,6 +1635,7 @@ function buildWorkbook(fy) {
     .concat(cats.map(k => { const ct = CATS.find(c => c.name === k); return [k, ...LINES.map(l => r2(sm.byCat[k][l] || 0)), r2(sm.byCat[k].total), r2(sm.byCat[k].itc), ct && ct.gifi || ""]; }))
     .concat([["Mileage allowance", ...LINES.map(l => r2(sm.mileByLine[l] || 0)), r2(sm.allowance)], ["Total expenses", ...LINES.map(l => r2(sm.expByLine[l] || 0)), sm.expenses], ["Net (before CCA)", ...LINES.map(l => r2((sm.revByLine[l] || 0) - (sm.expByLine[l] || 0))), sm.net], [],
       ["Capital purchases (CCA)", r2(sm.capital)], ["Meals - total spent", r2(sm.meals)], ["Business km", Math.round(sm.km)], ["Unpaid invoices", r2(sm.receivable)], ["Owed to shareholders (all years)", sm.shBal]]));
+  sheet("Hours", [["Date", "Job", "Who", "Start", "End", "Break (min)", "Hours", "Rate", "Value", "Note"]].concat(state.hours.filter(h => fyOf(hourDate(h), s.fyStart) === fy).sort((a, b) => String(a.start || a.date).localeCompare(String(b.start || b.date))).map(h => [hourDate(h), jobName(h.job), h.person || "", h.start ? String(h.start).slice(11, 16) : "", h.end ? String(h.end).slice(11, 16) : "", N(h.breakMin), r2(hoursOf(h)), num(h.rate) !== null ? +h.rate : s.timeRate, hoursValue(h, s), h.note || ""])));
   sheet("Ledger", [["Date", "Type", "Shareholder / tax", "In", "Out", "Tax paid", "Note"]].concat(state.ledger.map(e => [e.date, e.kind === "tax" ? "Tax payment" : "Shareholder", e.kind === "tax" ? e.tax : e.who, e.in ?? "", e.out ?? "", e.amount ?? "", e.note || ""])));
   return new Blob([XLSX.write(wb, { bookType: "xlsx", type: "array" })], { type: "application/octet-stream" });
 }
@@ -1580,7 +1657,7 @@ async function exportAll(to, btn) {
 function backupData() {
   const strip = o => { const c = {}; for (const k in o) if (!k.startsWith("_")) c[k] = o[k]; return c; };
   return { app: "Pilon Homes Office", version: 1, exportedAt: new Date().toISOString(), settings: state.settings,
-    jobs: state.jobs.map(strip), receipts: state.receipts.map(strip), trips: state.trips.map(strip), ledger: state.ledger.map(strip) };
+    jobs: state.jobs.map(strip), receipts: state.receipts.map(strip), trips: state.trips.map(strip), ledger: state.ledger.map(strip), hours: state.hours.map(strip) };
 }
 async function backup(to, btn) {
   const text = JSON.stringify(backupData());
@@ -1600,12 +1677,112 @@ document.addEventListener("change", async e => {
   if (e.target.id !== "restore" || !e.target.files[0]) return;
   let d; try { d = JSON.parse(await e.target.files[0].text()); } catch (x) { toast("That isn't a backup file.", "err"); return; }
   if (!d || d.app !== "Pilon Homes Office" || !Array.isArray(d.jobs)) { toast("That isn't a Pilon Homes Office backup.", "err"); return; }
-  const n = d.jobs.length + d.receipts.length + d.trips.length + d.ledger.length;
+  const n = d.jobs.length + d.receipts.length + d.trips.length + d.ledger.length + (d.hours || []).length;
   toast(`Restoring ${n} records... existing records with the same ID are replaced.`);
   if (d.settings) await saveDoc("config/settings", Object.assign({}, d.settings, { folders: state.settings.folders }));
-  for (const [col, list] of [["jobs", d.jobs], ["receipts", d.receipts], ["trips", d.trips], ["ledger", d.ledger]])
+  for (const [col, list] of [["jobs", d.jobs], ["receipts", d.receipts], ["trips", d.trips], ["ledger", d.ledger], ["hours", d.hours || []]])
     for (const r of list) { if (r && r.id) await saveDoc(col + "/" + r.id, r); }
   toast("Restore finished: " + n + " records.");
+});
+
+
+// ---------------- hours / timesheet ----------------
+const running = () => state.hours.find(h => h.start && !h.end && num(h.hours) === null);
+const fmtDur = hrs => { const m = Math.round(hrs * 60); return Math.floor(m / 60) + "h " + String(m % 60).padStart(2, "0") + "m"; };
+const fmtClock = ms => { const s = Math.max(0, Math.floor(ms / 1000)); return Math.floor(s / 3600) + ":" + String(Math.floor(s / 60) % 60).padStart(2, "0") + ":" + String(s % 60).padStart(2, "0"); };
+function jobHours(no) { return state.hours.filter(h => h.job === no).reduce((a, h) => a + hoursOf(h), 0); }
+function fyHours(fy) { return state.hours.filter(h => fyOf(hourDate(h), S().fyStart) === fy).reduce((a, h) => a + hoursOf(h), 0); }
+function fyHoursValue(fy) { return state.hours.filter(h => fyOf(hourDate(h), S().fyStart) === fy).reduce((a, h) => a + hoursValue(h, S()), 0); }
+function jobName(no) { const j = state.jobs.find(x => x.number === no); return j ? j.number + " " + (j.project || "") : (no || "General / office"); }
+function openJobOptions(sel) {
+  const open = state.jobs.filter(j => !["Paid", "Lost"].includes(j.status)).sort((a, b) => (b.number || "").localeCompare(a.number || ""));
+  return `<option value="">General / office time</option>` + open.map(j => `<option value="${esc(j.number)}" ${j.number === sel ? "selected" : ""}>${esc(j.number + " " + (j.project || ""))}</option>`).join("");
+}
+function clockCard() {
+  const r = running();
+  if (r) {
+    const ms = Date.now() - new Date(r.start).getTime();
+    return `<section class="card clock on"><div class="bar"><div><div class="sm muted">On the clock · ${esc(jobName(r.job))}</div>
+      <div class="clockt" data-clock="${esc(r.start)}" data-rate="${num(r.rate) !== null ? r.rate : S().timeRate}">${fmtClock(ms)}</div>
+      <div class="sm muted" data-clockval>${money(ms / 3600000 * (num(r.rate) !== null ? r.rate : S().timeRate))} at $${num(r.rate) !== null ? r.rate : S().timeRate}/hr</div></div>
+      <button class="btn primary" data-action="clockOut">Clock out</button></div></section>`;
+  }
+  const last = state.hours.slice().sort((a, b) => String(b.start || "").localeCompare(String(a.start || "")))[0];
+  return `<section class="card clock"><div class="lrow"><label class="fld grow" for="clockJob"><span>Clock in to</span><select id="clockJob">${openJobOptions(state.clockJob ?? (last && last.job) ?? "")}</select></label>
+    <button class="btn primary" data-action="clockIn">${ico("clock")} Clock in</button></div>
+    <div class="sm"><a href="#hours">Timesheet</a> · ${fyHours(curFY()).toFixed(1)} h this year</div></section>`;
+}
+function timeTabs(on) { return `<nav class="subtabs"><a href="#hours" class="${on === "hours" ? "on" : ""}">Hours</a><a href="#mileage" class="${on === "mileage" ? "on" : ""}">Mileage</a></nav>`; }
+function hourRow(h) {
+  const hrs = hoursOf(h), live = h.start && !h.end && num(h.hours) === null;
+  const t = h.start && num(h.hours) === null ? String(h.start).slice(11, 16) + (h.end ? "–" + String(h.end).slice(11, 16) : " – now") : "";
+  return `<a class="row" href="#hour-${h.id}"><div class="grow"><div><b>${esc(jobName(h.job))}</b></div><div class="muted sm">${esc(hourDate(h) || "")} ${t}${N(h.breakMin) ? " · " + h.breakMin + " min break" : ""}${h.note ? " · " + esc(h.note) : ""}${h.person ? " · " + esc(h.person) : ""}</div></div>
+    <div class="end"><div class="amt">${fmtDur(hrs)}</div>${live ? `<span class="chip warn">Running</span>` : `<div class="muted sm">${money(hoursValue(h, S()))}</div>`}</div></a>`;
+}
+function vHours() {
+  if (loading()) return `<div class="empty"><p>Loading...</p></div>`;
+  const fy = curFY(), list = state.hours.filter(h => fyOf(hourDate(h), S().fyStart) === fy).sort((a, b) => String(b.start || b.date || "").localeCompare(String(a.start || a.date || "")));
+  const wk = (() => { const d = new Date(); d.setHours(0, 0, 0, 0); d.setDate(d.getDate() - ((d.getDay() + 6) % 7)); return d.getTime(); })();
+  const week = state.hours.filter(h => new Date(h.start || hourDate(h) + "T12:00").getTime() >= wk).reduce((a, h) => a + hoursOf(h), 0);
+  return `${timeTabs("hours")}<div class="bar"><h2>Hours</h2><button class="btn" data-action="newHour">${ico("plus")} Add time</button></div>
+  ${clockCard()}
+  <section class="tiles">${tile("This week", week.toFixed(1) + " h", money0(week * S().timeRate))}${tile("This year", fyHours(fy).toFixed(1) + " h", money0(fyHoursValue(fy)) + " at $" + S().timeRate + "/hr")}</section>
+  <section class="card">${list.length ? list.map(hourRow).join("") : `<p class="muted">No hours yet. Clock in when you start on a job, or add time afterwards.</p>`}</section>
+  <p class="hint">Optional - for your own tracking. Logged hours show on each job's Costs tab against the estimate.</p>`;
+}
+function vHourEdit(id) {
+  let h = state.draft;
+  if (!h || h.id !== id) { const ex = state.hours.find(x => x.id === id); if (!ex) return `<div class="empty"><p>Entry not found.</p><a class="btn" href="#hours">Back</a></div>`; h = state.draft = JSON.parse(JSON.stringify(ex)); }
+  const manual = num(h.hours) !== null || h._manual;
+  return `<div class="bar"><a class="back" href="#hours">${ico("back")} Hours</a></div>
+  <section class="card form">
+    <label class="fld" for="hJob"><span>Job</span><select id="hJob" data-bind="draft.job">${openJobOptions(h.job)}${h.job && !state.jobs.some(j => j.number === h.job && !["Paid", "Lost"].includes(j.status)) ? `<option selected value="${esc(h.job)}">${esc(jobName(h.job))}</option>` : ""}</select></label>
+    <div class="grid2">${field("Who", "draft.person", h.person, { type: "select", options: S().shareholders })}${field("Rate $/hr", "draft.rate", h.rate, { type: "number", ph: String(S().timeRate) })}</div>
+    <div class="chips"><button class="chipbtn ${manual ? "" : "on"}" data-action="hourMode" data-m="clock">Start & end</button><button class="chipbtn ${manual ? "on" : ""}" data-action="hourMode" data-m="manual">Just hours</button></div>
+    ${manual ? `<div class="grid2">${field("Date", "draft.date", h.date || hourDate(h) || today(), { type: "date" })}${field("Hours", "draft.hours", h.hours, { type: "number", ph: "e.g. 3.5" })}</div>`
+      : `<div class="grid2">${field("Start", "draft.start", String(h.start || "").slice(0, 16), { type: "datetime-local" })}${field("End", "draft.end", String(h.end || "").slice(0, 16), { type: "datetime-local" })}</div>${field("Break (minutes)", "draft.breakMin", h.breakMin, { type: "number", ph: "0" })}`}
+    ${field("Note", "draft.note", h.note, { ph: "What you worked on" })}
+    <div class="totals"><div class="tr"><span>Hours</span><span>${fmtDur(hoursOf(h))}</span></div>${trow("Value", hoursValue(h, S()), true)}</div>
+  </section>
+  <div class="actions sticky"><button class="btn primary" data-action="saveHour">Save</button>${state.hours.some(x => x.id === h.id) ? `<button class="btn danger ghost" data-action="delHour">Delete</button>` : ""}</div>`;
+}
+function jobHoursCard(j) {
+  const list = state.hours.filter(h => h.job === j.number).sort((a, b) => String(b.start || b.date || "").localeCompare(String(a.start || a.date || "")));
+  const hrs = list.reduce((a, h) => a + hoursOf(h), 0), est = jobCalc(j, S(), RATES()).hours, p = jobProfit(j, state, DATA, CATS);
+  return `<section class="card"><div class="bar"><h3>Hours</h3><button class="btn sm" data-action="clockInJob" data-job="${esc(j.number)}">${ico("clock")} Clock in</button></div>
+    <div class="kv">${kv("Logged", hrs.toFixed(1) + " h")}${kv("Estimate allowed", est.toFixed(1) + " h")}${kv("Your time at $" + S().timeRate + "/hr", money(list.reduce((a, h) => a + hoursValue(h, S()), 0)))}${hrs ? kv("Profit per hour worked", money(p.profit / hrs)) : ""}</div>
+    ${est && hrs > est ? `<p class="banner warn">Over the estimate by ${(hrs - est).toFixed(1)} h - worth a look at your rates for this kind of job.</p>` : ""}
+    ${list.map(hourRow).join("")}</section>`;
+}
+async function clockIn(job) {
+  if (running()) { toast("You're already clocked in.", "err"); return; }
+  const h = { id: uid(), job: job || "", start: localStamp(), end: null, breakMin: null, person: S().shareholders[0] || "", note: "", created: Date.now() };
+  state.hours.push(h); await saveDoc("hours/" + h.id, h); toast("Clocked in" + (job ? " to " + job : "") + ".");
+  render();
+}
+async function clockOut() {
+  const r = running(); if (!r) return;
+  r.end = localStamp(); await saveDoc("hours/" + r.id, r);
+  toast("Clocked out: " + fmtDur(hoursOf(r)) + " · " + money(hoursValue(r, S())) + ". Tap the entry to add a break or note.");
+  render();
+}
+setInterval(() => {
+  document.querySelectorAll("[data-clock]").forEach(el => {
+    const ms = Date.now() - new Date(el.dataset.clock).getTime(); el.textContent = fmtClock(ms);
+    const v = el.parentElement.querySelector("[data-clockval]"); if (v) v.textContent = money(ms / 3600000 * +el.dataset.rate) + " at $" + el.dataset.rate + "/hr";
+  });
+}, 1000);
+document.addEventListener("change", e => { if (e.target.id === "clockJob") state.clockJob = e.target.value; });
+document.addEventListener("click", async e => {
+  const a = e.target.closest("[data-action]"); if (!a) return;
+  const act = a.dataset.action;
+  if (act === "clockIn") await clockIn((document.getElementById("clockJob") || {}).value || "");
+  else if (act === "clockInJob") await clockIn(a.dataset.job);
+  else if (act === "clockOut") await clockOut();
+  else if (act === "newHour") { state.draft = { id: uid(), job: state.clockJob || "", person: S().shareholders[0] || "", date: today(), hours: null, _manual: true, created: Date.now() }; go("hour-" + state.draft.id); }
+  else if (act === "hourMode") { const h = state.draft; if (!h) return; if (a.dataset.m === "manual") { h._manual = true; if (num(h.hours) === null) h.hours = r2(hoursOf(h)) || null; h.date = hourDate(h) || today(); } else { delete h._manual; h.hours = null; if (!h.start) h.start = (h.date || today()) + "T08:00:00"; } render(); }
+  else if (act === "saveHour") { const h = state.draft; if (!h) return; if (num(h.hours) === null && !(h.start && h.end) && !(h.start && !h.end)) { toast("Add the hours, or a start and end time.", "err"); return; } if (h.start && h.start.length === 16) h.start += ":00"; if (h.end && h.end.length === 16) h.end += ":00"; if (h.end && h.start && h.end < h.start) { toast("End is before start.", "err"); return; } const clean = {}; for (const k in h) if (!k.startsWith("_")) clean[k] = h[k]; await saveDoc("hours/" + h.id, clean); state.draft = null; toast("Time saved."); go("hours"); }
+  else if (act === "delHour") { if (a.dataset.confirm) { await delDoc("hours/" + state.draft.id); state.draft = null; go("hours"); } else { a.dataset.confirm = 1; a.textContent = "Tap again to delete"; } }
 });
 
 // ---------------- icons ----------------
@@ -1613,7 +1790,7 @@ function ico(n) {
   const p = { camera: "M4 8h3l2-3h6l2 3h3v11H4z M12 17a4 4 0 1 0 0-8 4 4 0 0 0 0 8z", car: "M5 16l1.5-5h11L19 16 M4 16h16v3H4z M7 19v1 M17 19v1 M7.5 13.5h.01 M16.5 13.5h.01",
     plus: "M12 5v14 M5 12h14", back: "M15 6l-6 6 6 6", fwd: "M9 6l6 6-6 6", x: "M6 6l12 12 M18 6L6 18", doc: "M7 3h7l4 4v14H7z M14 3v4h4",
     send: "M4 12l16-8-6 16-3-7z M11 13l9-9", drive: "M8 4h8l5 9-4 7H7l-4-7z M8 4l8 13 M16 4L8 17 M3 13h18", down: "M12 4v11 M7 10l5 5 5-5 M5 20h14", spark: "M12 3l1.8 5.2L19 10l-5.2 1.8L12 17l-1.8-5.2L5 10l5.2-1.8z",
-    home: "M4 11l8-7 8 7 M6 10v10h12V10", jobs: "M4 7h16v12H4z M9 7V5h6v2", receipt: "M6 3h12v18l-3-2-3 2-3-2-3 2z M9 8h6 M9 12h6", report: "M5 20V10 M10 20V4 M15 20v-8 M20 20v-5", gear: "M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6z M19 12l2-1-1-3-2 .2-1.3-1.3.2-2-3-1-1 2h-2l-1-2-3 1 .2 2L6.8 7.2 4.8 7l-1 3 2 1v2l-2 1 1 3 2-.2 1.3 1.3-.2 2 3 1 1-2h2l1 2 3-1-.2-2 1.3-1.3 2 .2 1-3-2-1z" }[n] || "";
+    home: "M4 11l8-7 8 7 M6 10v10h12V10", clock: "M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18z M12 7v5l3 2", jobs: "M4 7h16v12H4z M9 7V5h6v2", receipt: "M6 3h12v18l-3-2-3 2-3-2-3 2z M9 8h6 M9 12h6", report: "M5 20V10 M10 20V4 M15 20v-8 M20 20v-5", gear: "M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6z M19 12l2-1-1-3-2 .2-1.3-1.3.2-2-3-1-1 2h-2l-1-2-3 1 .2 2L6.8 7.2 4.8 7l-1 3 2 1v2l-2 1 1 3 2-.2 1.3 1.3-.2 2 3 1 1-2h2l1 2 3-1-.2-2 1.3-1.3 2 .2 1-3-2-1z" }[n] || "";
   return `<svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="${p}"/></svg>`;
 }
 
@@ -1626,6 +1803,7 @@ function receiptFileName(r) { return safeName(`${r.date || today()} ${r.vendor |
 function errMsg(e) {
   const c = e && e.code;
   return c === "offline" ? "No signal - it's saved on your phone and will sync when you're back online."
+    : c === "unreachable" ? e.message
     : c === "not_connected" ? "Connect the app to Google in Settings first."
     : c === "auth" ? "Google refused the connection code - check it in Settings."
     : c === "claude" ? "Claude couldn't read it: " + String(e.message).replace(/^claude:\s*/, "")
