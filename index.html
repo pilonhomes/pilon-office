@@ -145,6 +145,9 @@ nav.nav a.on { color: var(--accent); }
 .pgrid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
 .ptbl { width: 100%; border-collapse: collapse; } .ptbl td { border-bottom: 1px solid #e3e3e3; padding: 6px 4px; vertical-align: top; } .ptbl td:last-child { text-align: right; white-space: nowrap; font-weight: 700; }
 .clock.on { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 7%, var(--card)); }
+.wrow { align-items: center; } .wrow > a { text-decoration: none; color: inherit; }
+.wrow.on { background: color-mix(in srgb, var(--accent) 8%, transparent); border-radius: 10px; padding-left: 8px; padding-right: 8px; }
+.clockt.sm2 { font-size: 24px; margin-top: 2px; }
 .clockt { font: 800 34px var(--display); font-stretch: 80%; font-variant-numeric: tabular-nums; line-height: 1.1; }
 .pill { font: 600 11.5px var(--body); padding: 4px 9px; border-radius: 99px; background: var(--soft); color: var(--muted); white-space: nowrap; }
 .pill.ok { color: var(--ok); } .pill.warn { color: var(--warn); background: color-mix(in srgb, var(--warn) 14%, transparent); } .pill.bad { color: #fff; background: var(--bad); }
@@ -743,7 +746,7 @@ function vHome() {
       <button class="big" data-action="newJob">${ico("plus")}<span>New quote</span></button>
     </div>
   </section>
-  ${clockCard()}
+  ${workCard()}
   <section class="tiles">
     ${tile("Revenue", money0(sm.revenue), "invoiced this year")}
     ${tile("Expenses", money0(sm.expenses), "deductible + mileage")}
@@ -1712,6 +1715,22 @@ function clockCard() {
     <button class="btn primary" data-action="clockIn">${ico("clock")} Clock in</button></div>
     <div class="sm"><a href="#hours">Timesheet</a> · ${fyHours(curFY()).toFixed(1)} h this year</div></section>`;
 }
+function workCard() {
+  const r = running(), rate = x => num(x.rate) !== null ? x.rate : S().timeRate;
+  const jobs = state.jobs.filter(j => ["Accepted", "In progress"].includes(j.status) || (r && r.job && r.job === j.number))
+    .sort((a, b) => (b.number || "").localeCompare(a.number || ""));
+  const line = (no, title, sub, href) => {
+    const on = r && (r.job || "") === no;
+    return `<div class="row wrow ${on ? "on" : ""}"><a class="grow" href="${href}"><div><b>${title}</b></div><div class="muted sm">${sub}</div>
+      ${on ? `<div class="clockt sm2" data-clock="${esc(r.start)}" data-rate="${rate(r)}">${fmtClock(Date.now() - new Date(r.start).getTime())}</div><div class="muted sm" data-clockval></div>` : ""}</a>
+      <div class="end">${on ? `<button class="btn sm primary" data-action="clockOut">Clock out</button>` : `<button class="btn sm" data-action="clockInJob" data-job="${esc(no)}">${ico("clock")} Clock in</button>`}</div></div>`;
+  };
+  return `<section class="card work"><div class="bar"><h3>Jobs in progress <span class="count">${jobs.length}</span></h3><a class="sm" href="#hours">Timesheet</a></div>
+    ${jobs.map(j => { const h = jobHours(j.number); return line(j.number, esc(j.number) + " " + esc(j.project || ""), esc(j.client && j.client.name || "") + (j.town ? " \u00b7 " + esc(j.town) : "") + " \u00b7 " + h.toFixed(1) + " h logged", "#job-" + j.id + "-costs"); }).join("")}
+    ${jobs.length ? "" : `<p class="muted sm">No jobs in progress. Mark a job <b>Accepted</b> or <b>In progress</b> and it shows up here.</p>`}
+    ${line("", "General / office time", "Estimates, bookkeeping, supply runs", "#hours")}
+  </section>`;
+}
 function timeTabs(on) { return `<nav class="subtabs"><a href="#hours" class="${on === "hours" ? "on" : ""}">Hours</a><a href="#mileage" class="${on === "mileage" ? "on" : ""}">Mileage</a></nav>`; }
 function hourRow(h) {
   const hrs = hoursOf(h), live = h.start && !h.end && num(h.hours) === null;
@@ -1755,7 +1774,11 @@ function jobHoursCard(j) {
     ${list.map(hourRow).join("")}</section>`;
 }
 async function clockIn(job) {
-  if (running()) { toast("You're already clocked in.", "err"); return; }
+  const cur = running();
+  if (cur && (cur.job || "") === (job || "")) { toast("You're already clocked in to that.", "err"); return; }
+  if (cur) { cur.end = localStamp(); await saveDoc("hours/" + cur.id, cur); toast("Clocked out of " + jobName(cur.job) + " (" + fmtDur(hoursOf(cur)) + ")."); }
+  const jj = job && state.jobs.find(x => x.number === job);
+  if (jj && ["Quoting", "Quote sent", "Accepted"].includes(jj.status || "Quoting") && jj.status === "Accepted") { jj.status = "In progress"; await saveDoc("jobs/" + jj.id, jj); }
   const h = { id: uid(), job: job || "", start: localStamp(), end: null, breakMin: null, person: S().shareholders[0] || "", note: "", created: Date.now() };
   state.hours.push(h); await saveDoc("hours/" + h.id, h); toast("Clocked in" + (job ? " to " + job : "") + ".");
   render();
