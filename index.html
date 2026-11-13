@@ -210,6 +210,7 @@ a.banner { text-decoration: none; }
 .sheetwrap.on { background: rgba(0,0,0,.35); }
 .sheet { width: min(100%, 560px); max-height: 88vh; overflow-y: auto; border-radius: 18px 18px 0 0; padding-bottom: calc(18px + env(safe-area-inset-bottom)); transform: translateY(100%); transition: transform .25s cubic-bezier(.2,.8,.2,1); }
 .sheetwrap.on .sheet { transform: none; }
+.rimg img.tonly { width: 160px; max-width: 100%; height: auto; }
 .clockt { font: 800 34px var(--display); font-stretch: 80%; font-variant-numeric: tabular-nums; line-height: 1.1; }
 @media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
 </style>
@@ -683,6 +684,7 @@ const money = n => (n < 0 ? "-$" : "$") + Math.abs(+n || 0).toLocaleString("en-C
 const money0 = n => (n < 0 ? "-$" : "$") + Math.abs(Math.round(+n || 0)).toLocaleString("en-CA");
 const pct = n => Math.round((+n || 0) * 1000) / 10 + "%";
 const today = () => { const d = new Date(); return d.getFullYear() + "-" + String(d.getMonth() + 1).padStart(2, "0") + "-" + String(d.getDate()).padStart(2, "0"); };
+const APP_VERSION = "13 \u00b7 Nov 12, 2026";
 const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
 const S = () => state.settings;
 const RATES = () => allRates(S(), DATA);
@@ -1138,7 +1140,7 @@ function vReceiptEdit(id) {
   }
   const c = receiptCalc(r, S(), CATS), cat = CATS.find(x => x.name === r.category);
   return `<div class="bar"><a class="back" href="#receipts">${ico("back")} Receipts</a>${r._reading ? `<span class="chip">Reading...</span>` : ""}</div>
-  ${r._img || r.thumb ? `<div class="rimg"><img src="${r._img || r.thumb}" alt="Receipt photo">${r.driveUrl ? `<a class="btn sm" href="${esc(r.driveUrl)}" target="_blank" rel="noopener">${ico("drive")} Open in Drive</a>` : ""}</div>` : ""}
+  ${r._img || r.thumb ? `<div class="rimg"><img src="${r._img || r.thumb}" alt="Receipt photo" ${r._img ? "" : 'class="tonly"'}>${r.driveUrl ? `<a class="btn sm" href="${esc(r.driveUrl)}" target="_blank" rel="noopener">${ico("drive")} Open in Drive</a>` : ""}</div>` : ""}
   ${r._reading ? `<div class="banner">${ico("spark")} Claude is reading the receipt. Check every field before saving.</div>` : r._read ? `<div class="banner ok">Filled in by Claude${r._note ? ": " + esc(r._note) : ""}. Check the amounts against the receipt.</div>` : ""}
   <section class="card form">
     <div class="grid2">${field("Date", "draft.date", r.date, { type: "date" })}${field("Vendor", "draft.vendor", r.vendor)}</div>
@@ -1291,6 +1293,7 @@ function vSettings() {
     <p class="muted sm">One file with every job, receipt (with photo thumbnails and Drive links), trip, ledger entry and your settings. Use it to move to the offline Google version, or to keep a safe copy.</p>
     <div class="actions"><button class="btn primary sm" data-action="backup" data-to="drive">${ico("drive")} Save backup to Drive</button><button class="btn sm" data-action="backup" data-to="download">${ico("down")} Download backup</button>
     <button class="btn sm ghost" data-action="restorePick">Restore from a backup file...</button></div>
+    <p class="hint">App version ${APP_VERSION}</p>
     ${s.lastBackup ? `<p class="hint">Last backup: <a href="${esc(s.lastBackup.url)}" target="_blank" rel="noopener">${esc(s.lastBackup.name)}</a></p>` : ""}
   </section>
   <section class="card form"><h4>Google Drive</h4>
@@ -1491,7 +1494,7 @@ document.addEventListener("change", async e => {
   try {
     d._blob = await shrink(file, 1600, 0.72);
     d._img = await blobToDataURL(d._blob);
-    d.thumb = await blobToDataURL(await shrink(file, 260, 0.6));
+    d.thumb = await blobToDataURL(await shrink(file, 160, 0.5));
   } catch (err) { toast(err.message, "err"); return; }
   if (!route().startsWith("receipt-")) go(d.id && state.receipts.some(x => x.id === d.id) ? "receipt-" + d.id : "receipt-new");
   if (photoNew) await readReceipt(d); else render();
@@ -2726,7 +2729,7 @@ function paintPill(s) {
   const ae = document.activeElement;
   if (route() === "settings" && !(ae && ae.closest && ae.closest("#conn"))) { clearTimeout(paintPill.t); paintPill.t = setTimeout(() => { const f = document.activeElement; if (!(f && f.matches && f.matches("#view input, #view textarea, #view select"))) render(); }, 400); }
 }
-if ("serviceWorker" in navigator && location.protocol === "https:") navigator.serviceWorker.register("sw.js").catch(() => {});
+if ("serviceWorker" in navigator && location.protocol === "https:") (() => { const had = !!navigator.serviceWorker.controller; navigator.serviceWorker.register("sw.js", { updateViaCache: "none" }).then(r => { r.update().catch(() => {}); document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible") r.update().catch(() => {}); }); navigator.serviceWorker.addEventListener("controllerchange", () => { if (had && !window.__reloaded) { window.__reloaded = true; location.reload(); } }); }).catch(() => {}); })();
 platform.start(paintPill).then(boot);
 
 
