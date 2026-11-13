@@ -245,7 +245,7 @@ const DEFAULT_SETTINGS = {
   gstNo: "", pstNo: "", etransfer: "", payableTo: "Pilon Homes",
   hourly: 85, helper: 45, markup: 0.15, contingency: 0.10, gst: 0.05, pst: 0.06,
   mile1: 0.73, mile2: 0.67, minCharge: 170, validDays: 30, deposit: 0.30, roundTo: 25,
-  payTerms: 15, timeRate: 80, fyStart: 1, pstOnInspections: false,
+  payTerms: 15, timeRate: 80, fyStart: 1, pstOnInspections: false, taxFrom: "",
   shareholders: ["Kirk", "Shareholder 2"],
   rateEdits: {}, customRates: [],
   folders: {
@@ -332,15 +332,22 @@ function jobCalc(job, S, rates) {
     return { name: s.name, na: !!s.na, labour, materials, other, cost, cont, price, hours: S.hourly ? labour / S.hourly : 0, lines };
   });
   const subtotal = r2(secs.reduce((a, b) => a + b.price, 0));
-  const pstOn = jobPst(job, S);
-  const gst = r2(subtotal * S.gst), pst = pstOn ? r2(subtotal * S.pst) : 0;
+  const pstOn = jobPst(job, S, job.quoteDate);
+  const gst = jobGst(job, S, job.quoteDate) ? r2(subtotal * S.gst) : 0, pst = pstOn ? r2(subtotal * S.pst) : 0;
   const total = r2(subtotal + gst + pst);
   const cost = r2(secs.reduce((a, b) => a + (b.na ? 0 : b.cost), 0));
   return { secs, subtotal, gst, pst, total, deposit: S.deposit > 0 ? Math.round(total * S.deposit) : 0, cost,
            hours: secs.reduce((a, b) => a + (b.na ? 0 : b.hours), 0) };
 }
-function jobPst(job, S) {
+// before the GST/PST registration date (Settings), nothing is charged unless a job says otherwise
+const beforeTax = (S, date) => !!(S.taxFrom && date && String(date) < S.taxFrom);
+function jobGst(job, S, date) {
+  if (job.gst === true || job.gst === false) return job.gst;
+  return !beforeTax(S, date);
+}
+function jobPst(job, S, date) {
   if (job.pst === true || job.pst === false) return job.pst;
+  if (beforeTax(S, date)) return false;
   return !(job.line === "Inspection" && !S.pstOnInspections);
 }
 function invoiceCalc(job, S, rates) {
@@ -348,8 +355,8 @@ function invoiceCalc(job, S, rates) {
   const inv = job.invoice || {};
   const changes = r2((inv.changes || []).reduce((a, c) => a + N(c.amount), 0));
   const subtotal = r2(q.subtotal + changes);
-  const pstOn = jobPst(job, S);
-  const gst = r2(subtotal * S.gst), pst = pstOn ? r2(subtotal * S.pst) : 0;
+  const d = inv.date || job.quoteDate, pstOn = jobPst(job, S, d);
+  const gst = jobGst(job, S, d) ? r2(subtotal * S.gst) : 0, pst = pstOn ? r2(subtotal * S.pst) : 0;
   const total = r2(subtotal + gst + pst);
   const paid = r2(N(inv.deposit) + (inv.payments || []).reduce((a, p) => a + N(p.amount), 0));
   return { quoted: q.subtotal, changes, subtotal, gst, pst, total, deposit: N(inv.deposit), paid, balance: r2(total - paid), q };
@@ -479,7 +486,7 @@ function jobProfit(job, state, DATA, CATS) {
            perHour: q.hours > 0 ? r2(profit / q.hours) : null };
 }
 
-if (typeof module !== "undefined") module.exports = { hoursOf, hourDate, hoursValue, localStamp, DEFAULT_SETTINGS, r2, fyOf, qtrOf, allRates, rateStd, detectType, lineCalc, jobCalc, invoiceCalc, receiptCalc, tripsCalc, summarize, jobProfit, sectionGroups };
+if (typeof module !== "undefined") module.exports = { jobGst, jobPst, hoursOf, hourDate, hoursValue, localStamp, DEFAULT_SETTINGS, r2, fyOf, qtrOf, allRates, rateStd, detectType, lineCalc, jobCalc, invoiceCalc, receiptCalc, tripsCalc, summarize, jobProfit, sectionGroups };
 
 // ===================== offline store + Google sync (replaces the Claude-hosted services) =====================
 const platform = (() => {
@@ -684,7 +691,7 @@ const money = n => (n < 0 ? "-$" : "$") + Math.abs(+n || 0).toLocaleString("en-C
 const money0 = n => (n < 0 ? "-$" : "$") + Math.abs(Math.round(+n || 0)).toLocaleString("en-CA");
 const pct = n => Math.round((+n || 0) * 1000) / 10 + "%";
 const today = () => { const d = new Date(); return d.getFullYear() + "-" + String(d.getMonth() + 1).padStart(2, "0") + "-" + String(d.getDate()).padStart(2, "0"); };
-const APP_VERSION = "13 \u00b7 Nov 12, 2026";
+const APP_VERSION = "15 \u00b7 Nov 12, 2026";
 const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
 const S = () => state.settings;
 const RATES = () => allRates(S(), DATA);
@@ -994,7 +1001,8 @@ function vJobDetails(j) {
     ${field("Site address", "job.address", j.address)}
     ${field("Town", "job.town", j.town)}
     <div class="grid2">${field("Quote date", "job.quoteDate", j.quoteDate, { type: "date" })}
-    ${field("Charge PST", "job.pst", j.pst === true ? "yes" : j.pst === false ? "no" : "", { type: "select", options: [["", "Automatic (" + (jobPst(Object.assign({}, j, { pst: null }), S()) ? "yes" : "no") + ")"], ["yes", "Yes"], ["no", "No"]] })}</div>
+    ${field("Charge GST", "job.gst", j.gst === true ? "yes" : j.gst === false ? "no" : "", { type: "select", options: [["", "Automatic (" + (jobGst(Object.assign({}, j, { gst: null }), S(), (j.invoice && j.invoice.date) || j.quoteDate) ? "yes" : "no") + ")"], ["yes", "Yes"], ["no", "No"]] })}
+    ${field("Charge PST", "job.pst", j.pst === true ? "yes" : j.pst === false ? "no" : "", { type: "select", options: [["", "Automatic (" + (jobPst(Object.assign({}, j, { pst: null }), S(), (j.invoice && j.invoice.date) || j.quoteDate) ? "yes" : "no") + ")"], ["yes", "Yes"], ["no", "No"]] })}</div>
     <div class="actions"><a class="btn primary" href="#job-${j.id}-${j.direct ? "invoice" : "estimate"}">Next: ${j.direct ? "invoice" : "estimate"} ${ico("fwd")}</a>
     <button class="btn danger ghost" data-action="delJob" data-id="${j.id}">Delete job</button></div>
   </section>`;
@@ -1103,7 +1111,7 @@ function vJobInvoice(j) {
     <button class="btn sm" data-action="addPayment">${ico("plus")} Record payment</button>
     ${field("Notes on invoice", "job.invoice.notes", inv.notes, { type: "textarea", rows: 2, ph: "Warranty, thank-you, care instructions..." })}
   </section>
-  <section class="card totals">${trow("Subtotal", c.subtotal)}${trow("GST", c.gst)}${c.pst ? trow("PST", c.pst) : ""}${trow("Total", c.total, true)}${trow("Paid", -c.paid)}${trow("Balance due", c.balance, true)}</section>
+  <section class="card totals">${trow("Subtotal", c.subtotal)}${c.gst ? trow("GST", c.gst) : ""}${c.pst ? trow("PST", c.pst) : ""}${trow("Total", c.total, true)}${trow("Paid", -c.paid)}${trow("Balance due", c.balance, true)}</section>
   ${sendCard(j, "invoice")}`;
 }
 function addDays(d, n) { const x = new Date(d + "T12:00:00"); x.setDate(x.getDate() + (+n || 0)); return x.toISOString().slice(0, 10); }
@@ -1272,6 +1280,8 @@ function vSettings() {
   <section class="card form"><h4>Taxes & year</h4>
     <div class="grid3">${pf("GST %", "gst", true)}${pf("PST %", "pst", true)}${field("Fiscal year starts", "set.fyStart", s.fyStart, { type: "select", options: [1,2,3,4,5,6,7,8,9,10,11,12].map(m => [m, new Date(2000, m - 1, 1).toLocaleString("en-CA", { month: "long" })]) })}</div>
     <div class="grid2">${pf("Mileage first 5,000 km $", "mile1")}${pf("Mileage after $", "mile2")}</div>
+    ${field("GST/PST charged starting (registration date)", "set.taxFrom", s.taxFrom, { type: "date" })}
+    <p class="hint">Quotes and invoices dated before this charge no GST or PST - for work you did before you were registered. Leave blank once it doesn't matter.</p>
     <label class="check"><input type="checkbox" data-bind="set.pstOnInspections" ${s.pstOnInspections ? "checked" : ""}> Charge PST on home inspections (confirm with Saskatchewan Finance)</label>
   </section>
   ${secEditor()}
@@ -1652,8 +1662,8 @@ function previewDoc(j, kind) {
   const s = S(), qc = jobCalc(j, s, RATES()), ic = kind === "invoice" ? invoiceCalc(j, s, RATES()) : null;
   const rows = qc.secs.map((sc, i) => sc.na || !sc.price ? "" : `<tr><td><b>${esc(j.sections[i].name)}</b></td><td class="pre">${esc(j.sections[i].desc || "")}</td><td>${money(sc.price)}</td></tr>`).join("");
   const tot = kind === "invoice"
-    ? trow("Subtotal", ic.subtotal) + trow("GST", ic.gst) + (ic.pst ? trow("PST", ic.pst) : "") + trow("Total", ic.total, true) + trow("Paid", -ic.paid) + trow("Balance due", ic.balance, true)
-    : trow("Subtotal", qc.subtotal) + trow("GST", qc.gst) + (qc.pst ? trow("PST", qc.pst) : "") + trow("Total", qc.total, true);
+    ? trow("Subtotal", ic.subtotal) + (ic.gst ? trow("GST", ic.gst) : "") + (ic.pst ? trow("PST", ic.pst) : "") + trow("Total", ic.total, true) + trow("Paid", -ic.paid) + trow("Balance due", ic.balance, true)
+    : trow("Subtotal", qc.subtotal) + (qc.gst ? trow("GST", qc.gst) : "") + (qc.pst ? trow("PST", qc.pst) : "") + trow("Total", qc.total, true);
   return `<div class="paper"><div class="phead"><img src="${LOGO}" alt="${esc(s.bizName)}"><div><b>${kind === "invoice" ? "INVOICE" : "QUOTE"}</b><div class="sm">#${esc(kind === "invoice" ? j.invoice.number : j.number)} \u00b7 ${esc(fmtDate(kind === "invoice" ? j.invoice.date : j.quoteDate))}</div></div></div>
     <div class="sm muted">${esc(s.address)} \u00b7 ${esc(s.phone)}</div>
     <div class="pgrid"><div><span class="sm muted">FOR</span><br>${esc(j.client.name)}<br>${esc(j.client.phone)}<br>${esc(j.client.email)}</div><div><span class="sm muted">PROJECT</span><br>${esc(j.project)}<br>${esc(j.address)}<br>${esc(j.town)}</div></div>
@@ -1736,8 +1746,8 @@ function buildPdf(j, kind) {
     y = doc.lastAutoTable.finalY + 10;
   }
   const tot = kind === "invoice"
-    ? [["Subtotal", ic.subtotal], ["GST (" + pct(s.gst) + ")", ic.gst]].concat(ic.pst ? [["PST (" + pct(s.pst) + ")", ic.pst]] : []).concat([["Total", ic.total], ["Less: deposit & payments", -ic.paid], ["BALANCE DUE", ic.balance]])
-    : [["Subtotal", qc.subtotal], ["GST (" + pct(s.gst) + ")", qc.gst]].concat(qc.pst ? [["PST (" + pct(s.pst) + ")", qc.pst]] : []).concat([["TOTAL", qc.total]]).concat(s.deposit > 0 ? [["Deposit to book (" + pct(s.deposit) + ")", qc.deposit]] : []);
+    ? [["Subtotal", ic.subtotal]].concat(ic.gst ? [["GST (" + pct(s.gst) + ")", ic.gst]] : []).concat(ic.pst ? [["PST (" + pct(s.pst) + ")", ic.pst]] : []).concat([["Total", ic.total], ["Less: deposit & payments", -ic.paid], ["BALANCE DUE", ic.balance]])
+    : [["Subtotal", qc.subtotal]].concat(qc.gst ? [["GST (" + pct(s.gst) + ")", qc.gst]] : []).concat(qc.pst ? [["PST (" + pct(s.pst) + ")", qc.pst]] : []).concat([["TOTAL", qc.total]]).concat(s.deposit > 0 ? [["Deposit to book (" + pct(s.deposit) + ")", qc.deposit]] : []);
   if (y > 640) { doc.addPage(); y = 50; }
   tot.forEach(([l, v]) => {
     const big = /^(TOTAL|BALANCE DUE)$/.test(l);
@@ -2035,20 +2045,24 @@ function swipeRow(j) { return `<div class="swipe" data-id="${j.id}"><button clas
 // ---------------- Spectora import ----------------
 const IMP_FIELDS = [
   ["id", "Inspection / order ID", /(inspection|order|report)\s*(id|#|number)|^id$/i],
-  ["date", "Inspection date", /(inspection\s*)?date|scheduled|datetime/i],
+  ["date", "Inspection date", /^(inspection\s*)?date$|^scheduled|datetime/i],
   ["first", "Client first name", /client.*first|first.*name/i],
   ["last", "Client last name", /client.*last|last.*name/i],
   ["name", "Client name", /^(client|customer|buyer)s?(\s*(full\s*)?name)?$|^name$/i],
   ["email", "Client email", /client.*e-?mail|^e-?mail/i],
   ["phone", "Client phone", /client.*phone|^phone|cell|mobile/i],
   ["address", "Property address", /address|street|property|location/i],
-  ["city", "City / town", /city|town/i],
-  ["desc", "Services / description", /service|template|description|type|package/i],
-  ["fee", "Fee / price", /^(total\s*)?fee|price|subtotal|amount|charge|total/i],
+  ["city", "City / town", /^city$|town/i],
+  ["desc", "Services / description", /service|package|inspection\s*type|^type$/i],
+  ["fee", "Total / price", /^total$|^(total\s*)?fee$|price|subtotal|^amount$|charge/i],
   ["travel", "Travel / mileage fee $", /travel|trip\s*fee|mileage\s*(fee|charge)/i],
-  ["km", "Distance (km)", /\bkm\b|kilomet|distance|miles?/i],
+  ["km", "Distance (km)", /\bkm\b|kilomet|distance|^miles?$/i],
   ["tax", "Tax charged", /tax|gst|pst/i],
-  ["paid", "Paid?", /paid|payment\s*status|balance/i]
+  ["payDate", "Payment date", /payment\s*(date|received)/i],
+  ["paid", "Paid? / amount owing", /^paid\??$|payment\s*status|balance|^outstanding$/i],
+  ["method", "Payment type", /payment\s*type|method/i],
+  ["notes", "Payment notes", /^notes?$|memo|^description$/i],
+  ["cancel", "Canceled?", /cancel/i]
 ];
 function impGuess(head) {
   const map = {}, used = new Set();
@@ -2056,49 +2070,81 @@ function impGuess(head) {
   if (map.name !== undefined && (map.first !== undefined || map.last !== undefined) && /first|last/i.test(head[map.name])) delete map.name;
   return map;
 }
+function impFeeCols(head) { // Spectora's "Fee 1 Name / Fee 1" pairs become the invoice lines
+  const out = [];
+  head.forEach((h, i) => { const m = String(h).trim().match(/^fee\s*(\d+)\s*name$/i); if (m) { const j = head.findIndex(x => new RegExp("^fee\\s*" + m[1] + "$", "i").test(String(x).trim())); if (j >= 0) out.push([i, j]); } });
+  return out;
+}
 function impDate(v) {
   if (v instanceof Date && !isNaN(v)) return v.getFullYear() + "-" + String(v.getMonth() + 1).padStart(2, "0") + "-" + String(v.getDate()).padStart(2, "0");
   if (typeof v === "number" && v > 20000 && v < 80000) { const d = new Date(Math.round((v - 25569) * 864e5)); return d.toISOString().slice(0, 10); }
-  const t = String(v || "").trim(); if (!t) return "";
+  const t = String(v || "").trim(); if (!t || /^(true|false|yes|no)$/i.test(t)) return "";
   let m = t.match(/(\d{4})-(\d{1,2})-(\d{1,2})/); if (m) return m[1] + "-" + m[2].padStart(2, "0") + "-" + m[3].padStart(2, "0");
   m = t.match(/(\d{1,2})\/(\d{1,2})\/(\d{2,4})/); if (m) { const y = m[3].length === 2 ? "20" + m[3] : m[3]; return y + "-" + m[1].padStart(2, "0") + "-" + m[2].padStart(2, "0"); }
-  const d = new Date(t); return isNaN(d) ? "" : d.toISOString().slice(0, 10);
+  return "";
 }
 const impNum = v => { if (typeof v === "number") return v; const n = parseFloat(String(v || "").replace(/[^0-9.\-]/g, "")); return isNaN(n) ? null : n; };
+const impKey = a => String(a || "").split(",")[0].toLowerCase().replace(/[^a-z0-9]/g, "");
 function impRow(r, map) {
-  const g = k => map[k] === undefined || map[k] === "" ? "" : r[+map[k]];
+  const im = state.imp, g = k => map[k] === undefined || map[k] === "" ? "" : r[+map[k]];
   const name = String(g("name") || [g("first"), g("last")].filter(Boolean).join(" ")).trim();
-  const paidRaw = g("paid"), pn = impNum(paidRaw);
-  return { id: String(g("id") || "").trim(), date: impDate(g("date")), name, email: String(g("email") || "").trim(), phone: String(g("phone") || "").trim(),
-    address: String(g("address") || "").trim(), city: String(g("city") || "").trim(), desc: String(g("desc") || "").trim() || "Home inspection",
-    fee: impNum(g("fee")), travel: impNum(g("travel")), km: impNum(g("km")), tax: impNum(g("tax")),
-    paid: map.paid === undefined || map.paid === "" ? null : (/^(y|yes|true|paid|1)$/i.test(String(paidRaw).trim()) || (/balance/i.test(state.imp.head[map.paid] || "") ? pn === 0 : false)) };
+  const addr = String(g("address") || "").trim(), parts = addr.split(",").map(x => x.trim()).filter(Boolean);
+  const city = String(g("city") || "").trim() || (parts.length >= 3 ? parts[parts.length - 2] : "");
+  const street = map.city !== undefined && map.city !== "" ? addr : (parts.length >= 3 ? parts.slice(0, -2).join(", ") : addr);
+  const paidRaw = String(g("paid")).trim(), paidHead = map.paid !== undefined && map.paid !== "" ? im.head[map.paid] : "";
+  const payDate = impDate(g("payDate"));
+  const paid = paidHead ? (/balance|outstanding/i.test(paidHead) ? impNum(paidRaw) === 0 : /^(y|yes|true|paid|1)$/i.test(paidRaw)) : !!payDate;
+  const lines = (im.feeCols || []).map(([a, b]) => ({ desc: String(r[a] || "").trim(), amount: impNum(r[b]) })).filter(l => l.desc && l.amount);
+  const notes = String(g("notes") || "").trim(), date = impDate(g("date"));
+  return { id: String(g("id") || "").trim(), date, name, email: String(g("email") || "").trim(), phone: String(g("phone") || "").trim(),
+    address: street, city, desc: String(g("desc") || "").trim() || (lines[0] ? lines[0].desc : "Home inspection"),
+    fee: impNum(g("fee")), travel: impNum(g("travel")), km: impNum(g("km")), tax: impNum(g("tax")), lines,
+    paid, payDate, method: String(g("method") || "").trim(), notes: /template/i.test(notes) ? "" : notes,
+    canceled: /^(true|yes|1)$/i.test(String(g("cancel")).trim()), upcoming: !!date && date > today() };
 }
-function impDup(x) {
+function impSkipReason(x) {
+  if (x.canceled) return "Canceled"; if (!x.fee && !x.lines.length) return "$0 / test"; if (x.upcoming) return "Upcoming"; return "";
+}
+function impDupJob(x) {
   const all = state.jobs.concat(state.trash);
-  if (x.id && all.some(j => j.spectoraId === x.id)) return true;
-  return !!(x.date && x.address && all.some(j => j.line === "Inspection" && j.address && j.address.toLowerCase() === x.address.toLowerCase() && ((j.invoice && j.invoice.date) || j.quoteDate) === x.date));
+  if (x.id) { const j = all.find(j => j.spectoraId === x.id); if (j) return j; }
+  const k = impKey(x.address);
+  return (x.date && k && all.find(j => j.line === "Inspection" && impKey(j.address) === k && ((j.invoice && j.invoice.date) || j.quoteDate) === x.date)) || null;
 }
+const impDup = x => !!impDupJob(x);
+const impTaxed = x => !!(state.imp.taxFrom && x.date && x.date >= state.imp.taxFrom);
 function vImport() {
   const im = state.imp;
   const head = `<div class="bar"><a class="back" href="#jobs">${ico("back")} Jobs</a></div><h2>Import from Spectora</h2>`;
-  if (!im) return head + `<section class="card"><p>In Spectora, go to <b>Reporting → Data Exports</b> (or Metrics → Export) and download your inspections as Excel or CSV. Then pick the file here.</p>
-    <p class="muted sm">Each inspection becomes an <b>invoice-only job</b> (Inspection line, no PST by default) with the client, address, services and fee. A travel fee becomes its own invoice line, and a distance column becomes a mileage trip. Inspections you've already imported are skipped.</p>
+  if (!im) return head + `<section class="card"><p>In Spectora, export your inspections (the export with <b>Client</b> columns is best) as Excel or CSV, then pick the file here.</p>
+    <p class="muted sm">Each inspection becomes an <b>invoice-only job</b> with the client, address and each fee as its own invoice line (inspection, walkthrough, mileage...). You can add mileage trips by town. Inspections already in the app are skipped - or get their client details filled in if they were missing.</p>
     <label class="btn primary filebtn">${ico("down")} Choose Spectora file<input type="file" id="impFile" accept=".xlsx,.xls,.csv,text/csv" hidden></label></section>`;
   const rows = im.rows.map(r => impRow(r, im.map));
   const opt = (k) => `<select data-impmap="${k}"><option value="">(none)</option>${im.head.map((h, i) => `<option value="${i}" ${String(im.map[k]) === String(i) ? "selected" : ""}>${esc(h || "Column " + (i + 1))}</option>`).join("")}</select>`;
-  const n = rows.filter((x, i) => im.sel[i] && !impDup(x) && (x.name || x.address)).length;
+  const willImport = (x, i) => im.sel[i] && !impDup(x) && (x.name || x.address);
+  const n = rows.filter(willImport).length, fills = rows.filter((x, i) => im.sel[i] && impDup(x) && x.name && !((impDupJob(x).client || {}).name)).length;
+  const anyTaxed = rows.some((x, i) => im.sel[i] && impTaxed(x));
+  const towns = {}; rows.forEach((x, i) => { if (willImport(x, i) && !x.km) { const t = x.city || "(no town)"; towns[t] = (towns[t] || 0) + 1; } });
+  const tkeys = Object.keys(towns).sort((a, b) => towns[b] - towns[a] || byName(a, b));
   return head + `<section class="card form"><div class="bar"><h4>${esc(im.file)} · ${rows.length} rows</h4><button class="btn sm ghost" data-action="impReset">Pick another file</button></div>
-    <p class="hint">Check that each field points at the right column.</p>
-    <div class="impmap">${IMP_FIELDS.map(([k, l]) => `<label class="fld"><span>${l}</span>${opt(k)}</label>`).join("")}</div>
-    <label class="check"><input type="checkbox" id="impInc" ${im.inclTax ? "checked" : ""}> The fee column already includes GST</label>
+    <details><summary class="sm">Column matching${im.feeCols.length ? ` · ${im.feeCols.length} fee columns found` : ""}</summary><div class="impmap">${IMP_FIELDS.map(([k, l]) => `<label class="fld"><span>${l}</span>${opt(k)}</label>`).join("")}</div></details>
   </section>
+  <section class="card form"><h4>GST & PST</h4>
+    <label class="fld"><span>GST/PST registration date (blank = not registered for any of these)</span><input type="date" id="impTaxFrom" value="${esc(im.taxFrom || "")}"></label>
+    ${im.taxFrom ? `<label class="check"><input type="checkbox" id="impInc" ${im.inclTax ? "checked" : ""}> From that date on, Spectora's prices already include the 5% GST</label>` : ""}
+    <p class="hint">${im.taxFrom ? `Inspections before ${esc(im.taxFrom)} import with no GST/PST; from then on GST applies${im.inclTax ? " and is taken out of Spectora's price (e.g. $472.50 = $450 + GST)" : " on top of Spectora's price"}. This also sets the date in Settings.` : "All of these import with no GST or PST."}</p>
+  </section>
+  ${tkeys.length ? `<section class="card form"><h4>Mileage</h4><p class="muted sm">Round-trip km for each town - each inspection gets a mileage trip with that distance. Leave a town blank to skip it.</p>
+    <label class="fld"><span>Trips start and end at</span><input id="impFrom" value="${esc(im.from)}"></label>
+    ${tkeys.map(t => `<div class="lrow"><span class="grow">${esc(t)} <span class="muted sm">× ${towns[t]}</span></span><input class="w120" type="number" inputmode="decimal" step="any" data-impkm="${esc(t)}" value="${esc(im.km[t] ?? "")}" placeholder="km"></div>`).join("")}
+    <p class="hint">Use your usual route there and back. Spellings that differ (e.g. a typo in Spectora) show as their own line.</p></section>` : ""}
   <section class="card"><div class="bar"><h4>Inspections</h4><span class="sm"><a href="#" data-action="impAll">All</a> · <a href="#" data-action="impNone">None</a></span></div>
-    ${rows.map((x, i) => { const dup = impDup(x); return `<label class="row improw ${dup ? "dim" : ""}"><input type="checkbox" data-impsel="${i}" ${im.sel[i] && !dup ? "checked" : ""} ${dup ? "disabled" : ""}>
-      <div class="grow"><div><b>${esc(x.name || "No client name")}</b> <span class="muted sm">${esc(x.date || "no date")}</span></div><div class="muted sm">${esc([x.address, x.city].filter(Boolean).join(", ") || "No address")} · ${esc(x.desc)}${x.km ? " · " + x.km + " km" : ""}</div></div>
-      <div class="end"><div class="amt">${x.fee !== null ? money(x.fee) : "-"}</div>${dup ? `<span class="chip">Already in</span>` : x.paid ? `<span class="chip ok">Paid</span>` : ""}</div></label>`; }).join("")}
+    ${rows.map((x, i) => { const dup = impDupJob(x), skip = impSkipReason(x), total = x.lines.length ? x.lines.reduce((a, l) => a + l.amount, 0) : x.fee;
+      return `<label class="row improw ${dup ? "dim" : ""}"><input type="checkbox" data-impsel="${i}" ${im.sel[i] && !dup ? "checked" : ""} ${dup ? "disabled" : ""}>
+      <div class="grow"><div><b>${esc(x.name || "No client name")}</b> <span class="muted sm">${esc(x.date || "no date")}</span></div><div class="muted sm">${esc([x.address, x.city].filter(Boolean).join(", ") || "No address")}${x.lines.length ? " · " + esc(x.lines.map(l => l.desc).join(" + ")) : ""}</div></div>
+      <div class="end"><div class="amt">${total !== null && total !== undefined ? money(total) : "-"}</div>${dup ? `<span class="chip">${x.name && !((dup.client || {}).name) ? "Adds name" : "Already in"}</span>` : skip ? `<span class="chip warn">${skip}</span>` : x.paid ? `<span class="chip ok">Paid</span>` : `<span class="chip warn">Unpaid</span>`}${!dup && impTaxed(x) ? `<span class="chip">GST</span>` : ""}</div></label>`; }).join("")}
   </section>
-  <div class="actions sticky"><button class="btn primary" data-action="impGo" ${n ? "" : "disabled"}>Import ${n} inspection${n === 1 ? "" : "s"}</button></div>`;
+  <div class="actions sticky"><button class="btn primary" data-action="impGo" ${n || fills ? "" : "disabled"}>Import ${n} inspection${n === 1 ? "" : "s"}${fills ? ` + add ${fills} client name${fills === 1 ? "" : "s"}` : ""}</button></div>`;
 }
 async function impFile(f) {
   if (!window.XLSX) { toast("The spreadsheet reader didn't load - check your connection and reload.", "err"); return; }
@@ -2108,42 +2154,49 @@ async function impFile(f) {
     const hi = aoa.findIndex(r => r.filter(c => String(c).trim()).length >= 3);
     if (hi < 0) { toast("Couldn't find a header row in that file.", "err"); return; }
     const head = aoa[hi].map(h => String(h).trim()), rows = aoa.slice(hi + 1).filter(r => r.some(c => String(c).trim()));
-    state.imp = { file: f.name, head, rows, map: impGuess(head), sel: rows.map(() => true), inclTax: false };
+    state.imp = { file: f.name, head, rows, map: impGuess(head), feeCols: impFeeCols(head), sel: [], inclTax: true, taxFrom: S().taxFrom || "", km: {}, from: ((S().address || "").split(",")[1] || "Home").trim() };
+    state.imp.sel = rows.map(r => !impSkipReason(impRow(r, state.imp.map)));
     render();
   } catch (e) { toast("Couldn't read that file (" + e.message + ").", "err"); }
 }
 async function impGo() {
-  const im = state.imp, s = S(); let jobs = 0, trips = 0; state.reserved = [];
+  const im = state.imp, s = S(); let jobs = 0, trips = 0, filled = 0; state.reserved = [];
   const btn = document.querySelector("[data-action=impGo]"); if (btn) { btn.disabled = true; btn.textContent = "Importing..."; }
+  if (im.taxFrom && im.taxFrom !== s.taxFrom) { s.taxFrom = im.taxFrom; saveSettings(); }
   for (let i = 0; i < im.rows.length; i++) {
-    const x = impRow(im.rows[i], im.map);
-    if (!im.sel[i] || impDup(x) || !(x.name || x.address)) continue;
-    const date = x.date || today(), number = nextJobNumber(date); state.reserved.push(number);
-    let fee = x.fee || 0, travel = x.travel || 0;
-    if (im.inclTax) { fee = r2(fee / (1 + s.gst)); travel = r2(travel / (1 + s.gst)); }
-    const lines = [{ desc: x.desc + (x.address ? " - " + x.address : ""), amount: fee }].concat(travel ? [{ desc: "Travel", amount: travel }] : []);
-    const sub = r2(fee + travel), pstLike = x.tax !== null && sub > 0 && x.tax > sub * (s.gst + s.pst * 0.5);
+    const x = impRow(im.rows[i], im.map); if (!im.sel[i] || !(x.name || x.address)) continue;
+    const dup = impDupJob(x);
+    if (dup) { if (x.name && !(dup.client || {}).name) { dup.client = Object.assign({}, dup.client, { name: x.name, email: x.email, phone: x.phone }); if (x.id) dup.spectoraId = x.id; if (!dup.town && x.city) dup.town = x.city; await saveDoc("jobs/" + dup.id, dup); filled++; } continue; }
+    const date = x.date || today(), number = /^[\w-]{3,20}$/.test(x.id) && !state.jobs.concat(state.trash).some(j => j.number === x.id) ? x.id : nextJobNumber(date); state.reserved.push(number);
+    const taxed = impTaxed(x), back = v => taxed && im.inclTax ? r2(v / (1 + s.gst)) : r2(v);
+    let lines = x.lines.length ? x.lines.map(l => ({ desc: l.desc, amount: back(l.amount) })) : [{ desc: x.desc, amount: back(x.fee || 0) }].concat(x.travel ? [{ desc: "Travel", amount: back(x.travel) }] : []);
+    if (lines[0]) lines[0].desc += x.address ? " - " + x.address + (x.city ? ", " + x.city : "") : "";
     const id = uid();
-    const job = { id, number, status: x.paid ? "Paid" : "Invoiced", line: "Inspection", type: "Custom", direct: true, project: x.desc, spectoraId: x.id || null,
+    const job = { id, number, status: x.paid ? "Paid" : "Invoiced", line: "Inspection", type: "Custom", direct: true, project: x.lines[0] ? x.lines[0].desc : x.desc, spectoraId: x.id || null,
       client: { name: x.name, phone: x.phone, email: x.email }, address: x.address, town: x.city, quoteDate: date, summary: "", sections: [], lines: [],
-      pst: pstLike ? true : null, supplied: "", excluded: "", assumptions: "", extraTerms: "", created: Date.now(),
-      invoice: { number, date, changes: lines, deposit: null, payments: [], notes: "", sent: { at: Date.now(), via: "Spectora" } } };
-    if (x.paid) job.invoice.payments.push({ date, amount: invoiceCalc(job, s, RATES()).total, method: "Other" });
+      gst: taxed ? null : false, pst: taxed ? null : false, supplied: "", excluded: "", assumptions: "", extraTerms: "", created: Date.now(),
+      invoice: { number, date, changes: lines, deposit: null, payments: [], notes: x.notes && !/^(e-?trans\w*|cash|paid.*|cheque.*)$/i.test(x.notes) ? x.notes : "", sent: { at: Date.now(), via: "Spectora" } } };
+    const how = x.notes + " " + x.method, method = /e-?trans/i.test(x.notes) ? "e-Transfer" : /cheque|check/i.test(x.notes) ? "Cheque" : /card|stripe|square|credit/i.test(how) ? "Credit card" : /^cash$/i.test(x.notes) ? "Cash" : "Other";
+    if (x.paid) job.invoice.payments.push({ date: x.payDate || date, amount: invoiceCalc(job, s, RATES()).total, method });
     state.jobs.push(job); await saveDoc("jobs/" + id, job); jobs++;
-    if (x.km) {
+    const km = x.km || num(im.km[x.city || "(no town)"]);
+    if (km) {
       const last = state.trips.slice().sort((a, b) => (b.date || "").localeCompare(a.date || ""))[0];
-      const t = { id: uid(), date, vehicle: "Personal vehicle", driver: (last && last.driver) || s.shareholders[0], from: (last && last.from) || "Home", to: x.address || x.city, purpose: "Home inspection", job: number, line: "Inspection", km: x.km, odoStart: "", odoEnd: "", created: Date.now() };
+      const t = { id: uid(), date, vehicle: "Personal vehicle", driver: (last && last.driver) || s.shareholders[0], from: im.from || "Home", to: [x.address, x.city].filter(Boolean).join(", "), purpose: "Home inspection - round trip", job: number, line: "Inspection", km, odoStart: "", odoEnd: "", created: Date.now() };
       state.trips.push(t); await saveDoc("trips/" + t.id, t); trips++;
     }
   }
   state.reserved = []; state.imp = null; state.filter.jst = "All";
-  toast(`Imported ${jobs} inspection${jobs === 1 ? "" : "s"}${trips ? " and " + trips + " trip" + (trips === 1 ? "" : "s") : ""}.`); go("jobs");
+  toast(`Imported ${jobs} inspection${jobs === 1 ? "" : "s"}${trips ? ", " + trips + " trip" + (trips === 1 ? "" : "s") : ""}${filled ? ", added " + filled + " client name" + (filled === 1 ? "" : "s") : ""}.`); go("jobs");
 }
 document.addEventListener("change", e => {
   if (e.target.id === "impFile" && e.target.files[0]) impFile(e.target.files[0]);
   else if (e.target.dataset && e.target.dataset.impmap) { state.imp.map[e.target.dataset.impmap] = e.target.value === "" ? undefined : +e.target.value; render(); }
   else if (e.target.dataset && e.target.dataset.impsel !== undefined) { state.imp.sel[+e.target.dataset.impsel] = e.target.checked; render(); }
   else if (e.target.id === "impInc") { state.imp.inclTax = e.target.checked; render(); }
+  else if (e.target.id === "impTaxFrom") { state.imp.taxFrom = e.target.value; render(); }
+  else if (e.target.id === "impFrom") { state.imp.from = e.target.value; }
+  else if (e.target.dataset && e.target.dataset.impkm !== undefined) { state.imp.km[e.target.dataset.impkm] = e.target.value; }
 });
 document.addEventListener("click", async e => {
   const a = e.target.closest("[data-action]"); if (!a) return;

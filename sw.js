@@ -1,5 +1,5 @@
 // Pilon Homes Office - offline support. Bump VERSION when the app changes.
-const VERSION = "pho-v13";
+const VERSION = "pho-v15";
 const SHELL = ["./", "./index.html", "./manifest.json", "./icon-192.png", "./icon-512.png", "./apple-touch-icon.png"];
 // cache: "reload" skips the browser's own cache, so a new version never installs an old copy of the page
 self.addEventListener("install", e => { e.waitUntil(caches.open(VERSION).then(c => c.addAll(SHELL.map(u => new Request(u, { cache: "reload" })))).then(() => self.skipWaiting())); });
